@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>에이원 직인 날인기</title>
+<meta name="apple-mobile-web-app-title" content="날인기">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="apple-touch-icon" href="icon.png">
+<link rel="icon" href="icon.png">
+<link rel="manifest" href="manifest.json">
+<style>
+:root{--ink:#1c1c1c;--sheet:#fff;--line:#c9c9c9;--soft:#f2f2f0;--mute:#666}
+@media (prefers-color-scheme:dark){:root{--ink:#eee;--sheet:#1a1a1a;--line:#444;--soft:#111;--mute:#aaa}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--soft);color:var(--ink);font-family:'Malgun Gothic','Apple SD Gothic Neo',sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:16px}
+form{background:var(--sheet);border:1px solid var(--line);padding:24px 20px;width:100%;max-width:360px;display:flex;flex-direction:column;gap:12px}
+h1{font-size:20px;margin:0 0 4px}
+p{margin:0;font-size:14px;color:var(--mute)}
+input[type=password]{font-size:18px;padding:12px;border:1px solid var(--ink);background:var(--sheet);color:var(--ink);width:100%}
+label{font-size:14px;display:flex;gap:8px;align-items:center}
+button{font-size:17px;padding:12px;border:0;background:var(--ink);color:var(--sheet);font-weight:700}
+button:disabled{opacity:.5}
+#msg{min-height:1.4em;font-size:14px}
+#msg.err{color:#b00020}
+</style>
+</head>
+<body>
+<form id="f" autocomplete="off">
+  <h1>에이원 직인 날인기</h1>
+  <p>회사 비밀번호를 넣어 주세요.</p>
+  <input id="pw" type="password" inputmode="text" aria-label="비밀번호" required>
+  <label><input id="keep" type="checkbox" checked> 이 폰에서는 다음부터 묻지 않기</label>
+  <button id="go">열기</button>
+  <div id="msg" role="status"></div>
+</form>
+<script>
+(() => {
+  const KEEP = "a1stamp-key", b64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0)), $ = id => document.getElementById(id);
+  const msg = (t, err) => { $("msg").textContent = t; $("msg").className = err ? "err" : ""; };
+  let enc = null;
+  const getEnc = () => enc || (enc = fetch("app.enc", { cache: "no-cache" }).then(r => { if (!r.ok) throw new Error("file"); return r.arrayBuffer(); }));
+  async function openWith(rawKey) {
+    const buf = new Uint8Array(await getEnc());
+    const k = await crypto.subtle.importKey("raw", rawKey, "AES-GCM", false, ["decrypt"]);
+    const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: buf.slice(0, 12) }, k, buf.slice(12));
+    const html = await new Response(new Blob([plain]).stream().pipeThrough(new DecompressionStream("gzip"))).text();
+    document.open(); document.write(html); document.close();
+  }
+  async function unwrap(pw) {
+    const s = await (await fetch("slot.json", { cache: "no-cache" })).json();
+    const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(pw), "PBKDF2", false, ["deriveKey"]);
+    const wk = await crypto.subtle.deriveKey({ name: "PBKDF2", salt: b64(s.salt), iterations: s.iter, hash: "SHA-256" }, base, { name: "AES-GCM", length: 256 }, false, ["decrypt"]);
+    return new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: b64(s.iv) }, wk, b64(s.ct)));
+  }
+  let saved = null; try { saved = localStorage.getItem(KEEP); } catch (e) {}
+  if (saved) { msg("여는 중…"); openWith(b64(saved)).catch(() => { try { localStorage.removeItem(KEEP); } catch (e) {} msg("비밀번호가 바뀌었어요. 새 비밀번호를 넣어 주세요.", true); }); }
+  else getEnc().catch(() => {});
+  $("f").onsubmit = async e => {
+    e.preventDefault(); $("go").disabled = true; msg("확인 중…");
+    let raw;
+    try { raw = await unwrap($("pw").value); } catch (err) { $("go").disabled = false; msg("비밀번호가 틀렸어요.", true); return; }
+    if ($("keep").checked) try { localStorage.setItem(KEEP, btoa(String.fromCharCode(...raw))); } catch (e) {}
+    msg("여는 중…");
+    try { await openWith(raw); } catch (err) { $("go").disabled = false; msg("열지 못했어요. 인터넷 연결을 확인해 주세요.", true); }
+  };
+})();
+</script>
+</body>
+</html>
