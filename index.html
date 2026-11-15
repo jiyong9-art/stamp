@@ -40,12 +40,20 @@ button:disabled{opacity:.5}
   const KEEP = "a1stamp-key", b64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0)), $ = id => document.getElementById(id);
   const msg = (t, err) => { $("msg").textContent = t; $("msg").className = err ? "err" : ""; };
   let enc = null;
-  const getEnc = () => enc || (enc = fetch("app.enc", { cache: "no-cache" }).then(r => { if (!r.ok) throw new Error("file"); return r.arrayBuffer(); }));
-  async function openWith(rawKey) {
-    const buf = new Uint8Array(await getEnc());
-    const k = await crypto.subtle.importKey("raw", rawKey, "AES-GCM", false, ["decrypt"]);
+  // 한 번 받은 날인기는 이 기기에 보관 → 다음부터는 바뀐 게 있을 때만 다시 받음 (ver.json은 아주 작음)
+  const idb = () => new Promise((res, rej) => { const r = indexedDB.open("a1stamp-link", 1); r.onupgradeneeded = () => r.result.createObjectStore("f"); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+  const idbGet = async k => { try { const db = await idb(); return await new Promise(r => { const q = db.transaction("f").objectStore("f").get(k); q.onsuccess = () => r(q.result); q.onerror = () => r(null); }); } catch (e) { return null; } };
+  const idbPut = async (k, v) => { try { const db = await idb(); db.transaction("f", "readwrite").objectStore("f").put(v, k); } catch (e) {} };
+  let ver = null; const getVer = () => ver || (ver = fetch("ver.json", { cache: "no-store" }).then(r => r.json()).catch(() => ({ app: "x", fonts: "x" })));
+  const getFile = async (name, v) => { const key = name + ":" + v, have = await idbGet(key); if (have) return have;
+    const r = await fetch(name + "?v=" + v); if (!r.ok) throw new Error("file"); const buf = await r.arrayBuffer(); idbPut(key, buf); return buf; };
+  const getEnc = () => enc || (enc = getVer().then(v => getFile("app.enc", v.app)));
+  const unpack = async (rawKey, ab) => { const buf = new Uint8Array(ab), k = await crypto.subtle.importKey("raw", rawKey, "AES-GCM", false, ["decrypt"]);
     const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: buf.slice(0, 12) }, k, buf.slice(12));
-    const html = await new Response(new Blob([plain]).stream().pipeThrough(new DecompressionStream("gzip"))).text();
+    return new Response(new Blob([plain]).stream().pipeThrough(new DecompressionStream("gzip"))).text(); };
+  async function openWith(rawKey) {
+    const html = await unpack(rawKey, await getEnc());
+    window.__a1fonts = async () => unpack(rawKey, await getFile("fonts.enc", (await getVer()).fonts));   // 도장 글꼴: 도장 만들 때만
     document.open(); document.write(html); document.close();
   }
   async function unwrap(pw) {
