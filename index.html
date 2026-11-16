@@ -44,9 +44,16 @@ button:disabled{opacity:.5}
   const idb = () => new Promise((res, rej) => { const r = indexedDB.open("a1stamp-link", 1); r.onupgradeneeded = () => r.result.createObjectStore("f"); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
   const idbGet = async k => { try { const db = await idb(); return await new Promise(r => { const q = db.transaction("f").objectStore("f").get(k); q.onsuccess = () => r(q.result); q.onerror = () => r(null); }); } catch (e) { return null; } };
   const idbPut = async (k, v) => { try { const db = await idb(); db.transaction("f", "readwrite").objectStore("f").put(v, k); } catch (e) {} };
-  let ver = null; const getVer = () => ver || (ver = fetch("ver.json", { cache: "no-store" }).then(r => r.json()).catch(() => ({ app: "x", fonts: "x" })));
+  // 최신 버전 확인: 4초 안에 못 받으면(인터넷 끊김·약함) 마지막으로 받은 버전으로 엶
+  const LASTV = "a1stamp-ver";
+  let ver = null; const getVer = () => ver || (ver = (async () => {
+    try { const ac = new AbortController(), tm = setTimeout(() => ac.abort(), 4000); const r = await fetch("ver.json", { cache: "no-store", signal: ac.signal }); clearTimeout(tm); if (!r.ok) throw 0; const v = await r.json(); try { localStorage.setItem(LASTV, JSON.stringify(v)); } catch (e) {} return v; }
+    catch (e) { let v = null; try { v = JSON.parse(localStorage.getItem(LASTV)); } catch (e2) {} if (v) { window.__a1offline = true; return v; } throw new Error("net"); }
+  })());
   const getFile = async (name, v) => { const key = name + ":" + v, have = await idbGet(key); if (have) return have;
-    const r = await fetch(name + "?v=" + v); if (!r.ok) throw new Error("file"); const buf = await r.arrayBuffer(); idbPut(key, buf); return buf; };
+    const r = await fetch(name + "?v=" + v).catch(() => null); if (!r || !r.ok) throw new Error("net"); const buf = await r.arrayBuffer(); await idbPut(key, buf);
+    try { const db = await idb(), st = db.transaction("f", "readwrite").objectStore("f"), q = st.getAllKeys(); q.onsuccess = () => q.result.forEach(k => { if (String(k).startsWith(name + ":") && k !== key) st.delete(k); }); } catch (e) {}   // 옛 버전은 지움
+    return buf; };
   const getEnc = () => enc || (enc = getVer().then(v => getFile("app.enc", v.app)));
   const unpack = async (rawKey, ab) => { const buf = new Uint8Array(ab), k = await crypto.subtle.importKey("raw", rawKey, "AES-GCM", false, ["decrypt"]);
     const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: buf.slice(0, 12) }, k, buf.slice(12));
@@ -57,19 +64,22 @@ button:disabled{opacity:.5}
     document.open(); document.write(html); document.close();
   }
   async function unwrap(pw) {
-    const s = await (await fetch("slot.json", { cache: "no-cache" })).json();
+    let s; try { s = await (await fetch("slot.json", { cache: "no-cache" })).json(); localStorage.setItem("a1stamp-slot", JSON.stringify(s)); } catch (e) { s = JSON.parse(localStorage.getItem("a1stamp-slot") || "null"); if (!s) throw new Error("net"); }
     const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(pw), "PBKDF2", false, ["deriveKey"]);
     const wk = await crypto.subtle.deriveKey({ name: "PBKDF2", salt: b64(s.salt), iterations: s.iter, hash: "SHA-256" }, base, { name: "AES-GCM", length: 256 }, false, ["decrypt"]);
     return new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: b64(s.iv) }, wk, b64(s.ct)));
   }
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});   // 첫 화면(이 페이지)도 인터넷 없이 열리게 보관
   $("show").onchange = () => { $("pw").type = $("show").checked ? "text" : "password"; };
   let saved = null; try { saved = localStorage.getItem(KEEP); } catch (e) {}
-  if (saved) { msg("여는 중…"); openWith(b64(saved)).catch(() => { try { localStorage.removeItem(KEEP); } catch (e) {} msg("비밀번호가 바뀌었어요. 새 비밀번호를 넣어 주세요.", true); }); }
+  if (saved) { msg("여는 중…"); openWith(b64(saved)).catch(err => {
+    if (err && err.message === "net") { msg("인터넷이 연결되지 않았어요. 이 기기에서 한 번 이상 연 뒤에는 인터넷 없이도 열려요.", true); return; }
+    try { localStorage.removeItem(KEEP); } catch (e) {} msg("비밀번호가 바뀌었어요. 새 비밀번호를 넣어 주세요.", true); }); }
   else getEnc().catch(() => {});
   $("f").onsubmit = async e => {
     e.preventDefault(); $("go").disabled = true; msg("확인 중…");
     let raw;
-    try { raw = await unwrap($("pw").value); } catch (err) { $("go").disabled = false; msg("비밀번호가 틀렸어요. 한/영 키와 대문자(Caps Lock)를 확인하세요.", true); return; }
+    try { raw = await unwrap($("pw").value); } catch (err) { $("go").disabled = false; msg(err && err.message === "net" ? "인터넷이 연결되지 않았어요. 연결한 뒤 다시 눌러 주세요." : "비밀번호가 틀렸어요. 한/영 키와 대문자(Caps Lock)를 확인하세요.", true); return; }
     if ($("keep").checked) try { localStorage.setItem(KEEP, btoa(String.fromCharCode(...raw))); } catch (e) {}
     msg("여는 중…");
     try { await openWith(raw); } catch (err) { $("go").disabled = false; msg("열지 못했어요. 인터넷 연결을 확인해 주세요.", true); }
