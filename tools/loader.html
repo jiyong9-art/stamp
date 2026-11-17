@@ -63,6 +63,7 @@ button:disabled{opacity:.5}
     window.__a1fonts = async () => unpack(rawKey, await getFile("fonts.enc", (await getVer()).fonts));   // 도장 글꼴: 도장 만들 때만
     document.open(); document.write(html); document.close();
   }
+  // 비밀번호는 소문자로 맞춰서 확인 (휴대폰 첫 글자 대문자·Caps Lock 걱정 없음)
   async function unwrap(pw) {
     let s; try { s = await (await fetch("slot.json", { cache: "no-cache" })).json(); localStorage.setItem("a1stamp-slot", JSON.stringify(s)); } catch (e) { s = JSON.parse(localStorage.getItem("a1stamp-slot") || "null"); if (!s) throw new Error("net"); }
     const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(pw), "PBKDF2", false, ["deriveKey"]);
@@ -79,7 +80,7 @@ button:disabled{opacity:.5}
   $("f").onsubmit = async e => {
     e.preventDefault(); $("go").disabled = true; msg("확인 중…");
     let raw;
-    try { raw = await unwrap($("pw").value.trim().toLowerCase());   // 비밀번호는 소문자로 맞춰서 확인 (휴대폰 첫 글자 대문자·Caps Lock 걱정 없음) } catch (err) { $("go").disabled = false; msg(err && err.message === "net" ? "인터넷이 연결되지 않았어요. 연결한 뒤 다시 눌러 주세요." : "비밀번호가 틀렸어요. 한/영 키와 대문자(Caps Lock)를 확인하세요.", true); return; }
+    try { raw = await unwrap($("pw").value.trim().toLowerCase()); } catch (err) { $("go").disabled = false; msg(err && err.message === "net" ? "인터넷이 연결되지 않았어요. 연결한 뒤 다시 눌러 주세요." : "비밀번호가 틀렸어요. 한/영 키와 대문자(Caps Lock)를 확인하세요.", true); return; }
     if ($("keep").checked) try { localStorage.setItem(KEEP, btoa(String.fromCharCode(...raw))); } catch (e) {}
     msg("여는 중…");
     try { await openWith(raw); } catch (err) { $("go").disabled = false; msg("열지 못했어요. 인터넷 연결을 확인해 주세요.", true); }
